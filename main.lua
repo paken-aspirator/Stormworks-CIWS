@@ -79,17 +79,15 @@ function linReg3()
 	return {-xa * 60,xb,-ya * 60,yb,-za * 60,zb}
 end
 
-function deltaF(t0)
-	local t = t0 + (delay*tick)
+function deltaF(t)
 	local dist = math.sqrt((rx+vx*t)*(rx+vx*t)+(ry+vy*t)*(ry+vy*t)+(rz+vz*t+G*t*t/2)*(rz+vz*t+G*t*t/2))
 	if 60 *dist * loge099 / init_v < -1 then 
 		return -100
 	end
-	return math.log(1 + 60.0 * dist * loge099 / init_v, 0.99)/60.0 - t
+	return math.log(1 + 60.0 * dist * loge099 / init_v, 0.99)/60.0 - (t - delay*tick)
 end
 
-function dfdt(t0)
-	local t = t0 + (delay*tick)
+function dfdt(t)
 	local dist = math.sqrt((rx+vx*t)*(rx+vx*t)+(ry+vy*t)*(ry+vy*t)+(rz+vz*t+G*t*t/2)*(rz+vz*t+G*t*t/2))
 	if init_v + 60 * dist * loge099 <= 0 then
 		return 0
@@ -119,11 +117,11 @@ function solve_t(t)
 
 		t = t - dt
 		-- 
-		if t < 0 then
+		if t < delay * tick then
 			return -1
 		end
 
-		if math.abs(dt) < 0.03 then
+		if math.abs(dt) < 0.02 then
 			return t
 		end
 	end
@@ -132,7 +130,7 @@ function solve_t(t)
 end
 
 function init_t(x)
-	return math.max(5.0*x/6000.0, (x-350.0)/400.0)
+	return math.max(5.0*x/6000.0, (x-350.0)/400.0) + delay * tick
 end
 
 function onTick()
@@ -223,7 +221,7 @@ function onTick()
 		target_x, target_y, target_z = rx, ry, rz
 		output.setNumber(4,403)
 	else  --point at the future trajectory
-		local t = solve_t(init_t(dist)) + (delay*tick)
+		local t = solve_t(init_t(dist))
 		if t < 0 then
 			target_x, target_y, target_z = rx, ry, rz
 			output.setNumber(4,404)
