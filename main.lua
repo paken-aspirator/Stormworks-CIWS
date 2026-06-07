@@ -16,10 +16,27 @@ rtol = 0.05
 delay = 6 --[tick]
 tick = 1/60.0
 Z_offset = 2
+disc_offset = 0.75 --[m]
 
 azi_hist = azi_hist or {}
 ele_hist = ele_hist or {}
 cnt=0
+
+function valid(x)
+	return x == x and x < 1e30 and x > -1e30
+end
+
+function clamp(a, lo, hi)
+	return math.max(lo,math.min(a,hi))
+end
+
+function xyzToPolar(x,y,z)
+	local r = math.sqrt(x*x + y*y + z*z)
+	if r == 0 then
+		return 0, 0, 0
+	end
+	return r, math.atan(y,x), math.asin(clamp(z/r, -1, 1))
+end
 
 function pushAngle(azi, ele)
 	for i = 10, 1, -1 do
@@ -30,9 +47,6 @@ function pushAngle(azi, ele)
 	ele_hist[1] = ele
 end
 
-function valid(x)
-	return x == x and x < 1e30 and x > -1e30
-end
 function pushHis(x,y,z)
 	if maxHisLen <= #his_x then
 		xsums={xsums[1]-his_x[maxHisLen], xsums[2]-maxHisLen*his_x[maxHisLen]}
@@ -58,7 +72,33 @@ function pushHis(x,y,z)
 	zsums[2]=zsums[2]+zsums[1]
 end
 
-function linReg3()
+discRadDelay=3
+function updateHis(x,y,z)
+	if #his_x <= discRadDelay then
+		return
+	end
+    local nr, na, ne = xyzToPolar(x, y, z)
+local or_, oa, oe = xyzToPolar(
+	his_x[1 + discRadDelay],
+	his_y[1 + discRadDelay],
+	his_z[1 + discRadDelay]
+)
+
+    if nr > 0 and math.abs(nr - or_) / nr < 0.041
+	    and math.abs(na - oa) < 0.02513
+	    and math.abs(ne - oe) < 0.02513 then
+		local old_x, old_y, old_z = his_x[1 + discRadDelay], his_y[1 + discRadDelay], his_z[1 + discRadDelay]
+		local new_x, new_y, new_z = (3*x + old_x)/4, (3*y + old_y)/4, (3*z + old_z)/4
+		xsums={xsums[1]-old_x+new_x, xsums[2]+(new_x-old_x)*(1 + discRadDelay)}
+        ysums={ysums[1]-old_y+new_y, ysums[2]+(new_y-old_y)*(1 + discRadDelay)}
+        zsums={zsums[1]-old_z+new_z, zsums[2]+(new_z-old_z)*(1 + discRadDelay)}
+		his_x[1 + discRadDelay]=new_x
+		his_y[1 + discRadDelay]=new_y
+		his_z[1 + discRadDelay]=new_z
+	end
+end
+
+function linReg3() --linear regression
 	local N=#his_x
 	if N <=1 then
 		return {0, his_x[1] or 0, 0, his_y[1] or 0, 0, his_z[1] or 0}
@@ -198,6 +238,12 @@ function onTick()
 	ship_x = self_X * c(rader_azi) * c(rader_ele) - self_Y * s(rader_azi) - self_Z * c(rader_azi) * s(rader_ele)
 	ship_y = self_X * s(rader_azi) * c(rader_ele) + self_Y * c(rader_azi) - self_Z * s(rader_azi) * s(rader_ele)
 	ship_z = self_X * s(rader_ele) + self_Z * c(rader_ele) + Z_offset
+
+    local discX,discY,discZ = input.getNumber(12), input.getNumber(16), input.getNumber(20)
+	local azi_past, ele_past = azi_hist[1+discRadDelay], ele_hist[1+discRadDelay]
+    if azi_past and ele_past then
+	updateHis(discX * c(azi_past) * c(ele_past) - discY * s(azi_past) - discZ * c(azi_past) * s(ele_past), discX * s(azi_past) * c(ele_past) + discY * c(azi_past) - discZ * s(azi_past) * s(ele_past), discX * s(ele_past) + discZ * c(ele_past) + disc_offset)
+    end
 	
 	local diff = math.sqrt((rx-ship_x)^2 + (ry-ship_y)^2 + (rz-ship_z)^2)
 	local prev_dist = math.sqrt(rx^2 + ry^2 + rz^2)
@@ -234,9 +280,7 @@ function onTick()
 	output.setNumber(7,target_y)
 	output.setNumber(8,target_z)
 	
-	local dist = math.sqrt(target_x*target_x + target_y*target_y + target_z*target_z)
-	target_ele = math.asin(target_z/dist)
-	target_azi = math.atan(target_y,target_x)
+    local dist, target_azi, target_ele = xyzToPolar(target_x, target_y, target_z)
 	output.setNumber(1,dist)
 	output.setNumber(2,(target_azi-rader_azi)/pi/2.0)
 	output.setNumber(3,(target_ele-rader_ele)/pi/2.0)
