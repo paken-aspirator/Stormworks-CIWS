@@ -1,5 +1,4 @@
 pi = math.pi
-Z_offset = 1.25
 function onTick()
     local mindist = math.huge
     local azi = 0
@@ -16,15 +15,15 @@ function onTick()
         end
     end
     if mindist == math.huge then
-        output.setNumber(1, 0)
-        output.setNumber(2, 0)
-        output.setNumber(3, 0)
+        output.setNumber(1, 10000)
+        output.setNumber(2, 10000)
+        output.setNumber(3, 10000)
     else
         local aziRad = azi * pi * 2
         local eleRad = ele * pi * 2
     	local X = mindist * math.cos(aziRad) * math.cos(eleRad)
     	local Y = mindist * math.sin(aziRad) * math.cos(eleRad)
-    	local Z = mindist * math.sin(eleRad) + Z_offset
+    	local Z = mindist * math.sin(eleRad)
         output.setNumber(1, X)
         output.setNumber(2, Y)
         output.setNumber(3, Z)
