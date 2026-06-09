@@ -253,8 +253,9 @@ function solve_t(t)
 	return -1
 end
 
-function init_t(x)
-	return math.max(5.0*x/6000.0, (x-350.0)/400.0) + delay * tick
+function init_t(rx_,ry_,rz_,vx_,vy_,vz_)
+	local dist = math.sqrt(rx_*rx_ + ry_*ry_ + rz_*rz_)
+	return dist / ((rx_*vx_ + ry_*vy_ + rz_*vz_)/dist + 0.85 * init_v or 10)
 end
 
 function onTick()
@@ -351,7 +352,7 @@ function onTick()
 		target_x, target_y, target_z = rx, ry, rz
 		output.setNumber(4,403)
 	else  --point at the future trajectory
-		local t = solve_t(init_t(dist))
+		local t = solve_t(init_t(rx,ry,rz,vx,vy,vz))
 		if t < 0 then
 			target_x, target_y, target_z = rx, ry, rz
 			output.setNumber(4,404)
