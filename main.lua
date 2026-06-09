@@ -13,13 +13,19 @@ loge099 = -0.01005033585 -- log_e(0.99)
 init_v = 1000.0 --Initial velocity of cannon
 G = 30.0
 rtol = 0.05
-delay = 6 --[tick]
+delay = 4 --[tick]
 tick = 1/60.0
 Z_offset = 2
 disc_offset = 0.75 --[m]
+PD_P = 6
+PD_D = 15
 
 azi_hist = azi_hist or {}
 ele_hist = ele_hist or {}
+prev_azi_error = nil
+prev_ele_error = nil
+prev_target_azi = nil
+prev_target_ele = nil
 cnt=0
 
 function valid(x)
@@ -28,6 +34,34 @@ end
 
 function clamp(a, lo, hi)
 	return math.max(lo,math.min(a,hi))
+end
+
+function wrapAngle(a)
+	return (a + pi) % (pi * 2) - pi
+end
+
+function updateControl(target_azi, target_ele, rader_azi, rader_ele)
+	local azi_error = wrapAngle(target_azi - rader_azi) / pi / 2.0
+	local ele_error = wrapAngle(target_ele - rader_ele) / pi / 2.0
+	local azi_d = prev_azi_error and azi_error - prev_azi_error or 0
+	local ele_d = prev_ele_error and ele_error - prev_ele_error or 0
+	local azi_ff = prev_target_azi and wrapAngle(target_azi - prev_target_azi) / pi / 2.0 or 0
+	local ele_ff = prev_target_ele and wrapAngle(target_ele - prev_target_ele) / pi / 2.0 or 0
+
+	prev_azi_error = azi_error
+	prev_ele_error = ele_error
+	prev_target_azi = target_azi
+	prev_target_ele = target_ele
+
+	output.setNumber(2, PD_P * azi_error + PD_D * azi_d + azi_ff)
+	output.setNumber(3, PD_P * ele_error + PD_D * ele_d + ele_ff)
+end
+
+function resetControl()
+	prev_azi_error = nil
+	prev_ele_error = nil
+	prev_target_azi = nil
+	prev_target_ele = nil
 end
 
 function xyzToPolar(x,y,z)
@@ -119,49 +153,99 @@ function linReg3() --linear regression
 	return {-xa * 60,xb,-ya * 60,yb,-za * 60,zb}
 end
 
-function deltaF(t)
-	local dist = math.sqrt((rx+vx*t)*(rx+vx*t)+(ry+vy*t)*(ry+vy*t)+(rz+vz*t+G*t*t/2)*(rz+vz*t+G*t*t/2))
-	if 60 *dist * loge099 / init_v < -1 then 
-		return -100
-	end
-	return math.log(1 + 60.0 * dist * loge099 / init_v, 0.99)/60.0 - (t - delay*tick)
+function travelScale(tf)
+	-- tf: 発射後の弾の飛翔時間 [s]
+	-- 空気抵抗込みで、初速方向成分がどれだけ距離に変換されるか
+	local lambda = -60.0 * loge099
+	return (1.0 - math.exp(-lambda * tf)) / lambda
 end
 
-function dfdt(t)
-	local dist = math.sqrt((rx+vx*t)*(rx+vx*t)+(ry+vy*t)*(ry+vy*t)+(rz+vz*t+G*t*t/2)*(rz+vz*t+G*t*t/2))
-	if init_v + 60 * dist * loge099 <= 0 then
-		return 0
+function dragDrop(tf)
+	-- tf: 発射後の弾の飛翔時間 [s]
+	-- 空気抵抗込みの重力落下量
+	local lambda = -60.0 * loge099
+	return G * (tf / lambda - (1.0 - math.exp(-lambda * tf)) / (lambda * lambda))
+end
+
+function deltaF(t)
+	-- t: レーダー測定時刻から命中までの総時間 [s]
+	local d = delay * tick
+	local tf = t - d
+
+	if tf <= 0 then
+		return 1e9
 	end
-	local bunsi = (rx+vx*t)*vx + (ry+vy*t)*vy + (rz+vz*t+G*t*t/2)*(vz+G*t)
-	return bunsi / ((init_v + 60 * dist * loge099) * dist) - 1
+
+	-- t秒後の目標位置
+	local px = rx + vx * t
+	local py = ry + vy * t
+	local pz = rz + vz * t
+
+	-- 弾がtf秒で進める空気抵抗込みの距離係数
+	local A = travelScale(tf)
+	local can = init_v * A
+
+	-- 重力で落ちる分だけ上を狙う
+	local drop = dragDrop(tf)
+
+	-- 必要な発射方向ベクトルの長さに相当
+	local need = math.sqrt(px*px + py*py + (pz + drop)*(pz + drop))
+
+	return need - can
 end
 
 function solve_t(t)
+	-- tは「測定時刻から命中までの総時間」
+	local d = delay * tick
+
+	-- 初期値が遅延以下だと物理的に不可能
+	if t <= d then
+		t = d + 0.05
+	end
+	-- 初期値が大きすぎないように抑える
+	if t > 5.0 + d then
+		t = 5.0 + d
+	end
+
+	-- 数値微分つきニュートン法
 	for i = 1, 8 do
-		local error = deltaF(t)
-		local slope = dfdt(t)
+		local f = deltaF(t)
 
-		if error == -100 or slope == 0 then
+		if f ~= f or math.abs(f) > 1e30 then
 			return -1
 		end
 
-		if error ~= error or slope ~= slope then
+		if math.abs(f) < 0.5 then
+			return t
+		end
+
+		local h = 0.02
+		local fp = deltaF(t + h)
+		local fm = deltaF(t - h)
+
+		if fp ~= fp or fm ~= fm then
 			return -1
 		end
 
-		local dt = error / slope
+		local slope = (fp - fm) / (2.0 * h)
 
-		-- 
-		if dt > 1 then dt = 1 end
-		if dt < -1 then dt = -1 end
+		if math.abs(slope) < 0.0001 then
+			return -1
+		end
+
+		local dt = f / slope
+
+		-- 発散防止
+		if dt > 1.0 then dt = 1.0 end
+		if dt < -1.0 then dt = -1.0 end
 
 		t = t - dt
-		-- 
-		if t < delay * tick then
-			return -1
+
+		if t <= d then
+			t = d + 0.01
 		end
 
-		if math.abs(dt) < 0.02 then
+		if math.abs(dt) < 0.005 then
 			return t
 		end
 	end
@@ -225,9 +309,9 @@ function onTick()
 		cnt=cnt+1
 		output.setNumber(1,0)
 		if cnt >= 60 then
-			output.setNumber(2,-rader_azi/pi/2.0)
-			output.setNumber(3,-rader_ele/pi/2.0)
+			updateControl(0, 0, rader_azi, rader_ele)
 		else
+			resetControl()
 			output.setNumber(2,0)
 			output.setNumber(3,0)
 		end
@@ -250,9 +334,9 @@ function onTick()
 	if #his_x<4 or  diff / math.max(prev_dist, 1) < rtol then
 		pushHis(ship_x, ship_y, ship_z)
 	else
-		his_x={0}
-		his_y={0}
-		his_z={0}
+		his_x={}
+		his_y={}
+		his_z={}
 		xsums={0,0}
 		ysums={0,0}
 		zsums={0,0}
@@ -282,8 +366,7 @@ function onTick()
 	
     local dist, target_azi, target_ele = xyzToPolar(target_x, target_y, target_z)
 	output.setNumber(1,dist)
-	output.setNumber(2,(target_azi-rader_azi)/pi/2.0)
-	output.setNumber(3,(target_ele-rader_ele)/pi/2.0)
+	updateControl(target_azi, target_ele, rader_azi, rader_ele)
 	output.setNumber(9,dist)
 	output.setNumber(10,target_azi)
 	output.setNumber(11,target_ele)
