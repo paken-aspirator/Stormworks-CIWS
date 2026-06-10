@@ -10,15 +10,16 @@ pi=math.pi
 rx, ry, rz, vx, vy, vz =0,0,0,0,0,0
 maxHisLen=16
 loge099 = -0.01005033585 -- log_e(0.99)
-init_v = 1000.0 --Initial velocity of cannon
+init_v = 1000.0 --Initial velocity of shell [m/s]
 G = 30.0
 rtol = 0.05
-delay = 4 --[tick]
+delay = 6 --[tick]
 tick = 1/60.0
-Z_offset = 2
+Y_offset = 0.25 --[m]
+Z_offset = 1.25 --[m]
 disc_offset = 0.75 --[m]
-PD_P = 6
-PD_D = 15
+PD_P = 5
+PD_D = 10
 
 azi_hist = azi_hist or {}
 ele_hist = ele_hist or {}
@@ -129,7 +130,9 @@ local or_, oa, oe = xyzToPolar(
 		his_x[1 + discRadDelay]=new_x
 		his_y[1 + discRadDelay]=new_y
 		his_z[1 + discRadDelay]=new_z
+		return true
 	end
+	return false
 end
 
 function linReg3() --linear regression
@@ -255,7 +258,19 @@ end
 
 function init_t(rx_,ry_,rz_,vx_,vy_,vz_)
 	local dist = math.sqrt(rx_*rx_ + ry_*ry_ + rz_*rz_)
-	return dist / ((rx_*vx_ + ry_*vy_ + rz_*vz_)/dist + 0.85 * init_v or 10)
+	return dist / (((rx_*vx_ + ry_*vy_ + rz_*vz_)/dist + 0.85 * init_v) or 10)
+end
+
+function trigger(rx_,ry_,rz_,vx_,vy_,vz_)
+	local dist = math.sqrt(rx_*rx_ + ry_*ry_ + rz_*rz_)
+	if dist <=200 then --200m以内は無条件で発射
+		return true
+	end 
+	local rv = rx_*vx_ + ry_*vy_ + rz_*vz_
+	if rv<0 and -dist * dist / rv < 3 then
+		return true
+	end
+	return false
 end
 
 function onTick()
@@ -321,14 +336,15 @@ function onTick()
 		cnt = 0
 	end
 	ship_x = self_X * c(rader_azi) * c(rader_ele) - self_Y * s(rader_azi) - self_Z * c(rader_azi) * s(rader_ele)
-	ship_y = self_X * s(rader_azi) * c(rader_ele) + self_Y * c(rader_azi) - self_Z * s(rader_azi) * s(rader_ele)
+	ship_y = self_X * s(rader_azi) * c(rader_ele) + self_Y * c(rader_azi) - self_Z * s(rader_azi) * s(rader_ele) + Y_offset
 	ship_z = self_X * s(rader_ele) + self_Z * c(rader_ele) + Z_offset
 
     local discX,discY,discZ = input.getNumber(12), input.getNumber(16), input.getNumber(20)
 	local azi_past, ele_past = azi_hist[1+discRadDelay], ele_hist[1+discRadDelay]
     if azi_past and ele_past then
-	updateHis(discX * c(azi_past) * c(ele_past) - discY * s(azi_past) - discZ * c(azi_past) * s(ele_past), discX * s(azi_past) * c(ele_past) + discY * c(azi_past) - discZ * s(azi_past) * s(ele_past), discX * s(ele_past) + discZ * c(ele_past) + disc_offset)
-    end
+		local flag = updateHis(discX * c(azi_past) * c(ele_past) - discY * s(azi_past) - discZ * c(azi_past) * s(ele_past), discX * s(azi_past) * c(ele_past) + discY * c(azi_past) - discZ * s(azi_past) * s(ele_past) + Y_offset, discX * s(ele_past) + discZ * c(ele_past) + disc_offset)
+		output.setBool(2, flag)
+	end
 	
 	local diff = math.sqrt((rx-ship_x)^2 + (ry-ship_y)^2 + (rz-ship_z)^2)
 	local prev_dist = math.sqrt(rx^2 + ry^2 + rz^2)
@@ -348,27 +364,26 @@ function onTick()
 	local dist = math.sqrt(rx*rx + ry*ry + rz*rz)
 	local velo = math.sqrt(vx*vx + vy*vy + vz*vz)
 	
-	if dist > 1000 then --track the target
+	local t = solve_t(init_t(rx,ry,rz,vx,vy,vz))
+	if t < 0 then
 		target_x, target_y, target_z = rx, ry, rz
-		output.setNumber(4,403)
-	else  --point at the future trajectory
-		local t = solve_t(init_t(rx,ry,rz,vx,vy,vz))
-		if t < 0 then
-			target_x, target_y, target_z = rx, ry, rz
-			output.setNumber(4,404)
-		else
-			target_x, target_y, target_z = rx+vx*t, ry+vy*t, rz+vz*t+G*t*t/2.0
-			output.setNumber(4,200)
-		end
+		output.setNumber(4,404)
+	else
+		--式が間違っているので後で直す
+		target_x, target_y, target_z = rx+vx*t, ry+vy*t, rz+vz*t+G*t*t/2.0
+		output.setNumber(4,200)
 	end
+
 	output.setNumber(6,target_x)
 	output.setNumber(7,target_y)
 	output.setNumber(8,target_z)
 	
+	output.setBool(1, mindist ~= math.huge and trigger(target_x, target_y,target_z,vx,vy,vz))
     local dist, target_azi, target_ele = xyzToPolar(target_x, target_y, target_z)
 	output.setNumber(1,dist)
 	updateControl(target_azi, target_ele, rader_azi, rader_ele)
-	output.setNumber(9,dist)
-	output.setNumber(10,target_azi)
-	output.setNumber(11,target_ele)
+	output.setNumber(9,target_azi)
+	output.setNumber(10,target_ele)
+	output.setNumber(11,math.sqrt(vx*vx + vy*vy + vz*vz))
+	output.setNumber(12,(target_x*vx + target_y*vy + target_z*vz)/dist)
 end
