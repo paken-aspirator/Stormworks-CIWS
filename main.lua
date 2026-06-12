@@ -29,6 +29,13 @@ prev_target_azi = nil
 prev_target_ele = nil
 cnt=0
 
+function degToRad(deg)
+	return deg * pi / 180.0
+end
+
+azimuthLimit = degToRad(property.getNumber("azimuthLimit")) --[rad]
+elevationLimit = degToRad(property.getNumber("elevationLimit")) --[rad]
+
 function valid(x)
 	return x == x and x < 1e30 and x > -1e30
 end
@@ -324,6 +331,7 @@ function onTick()
 		zsums={0,0}
 		cnt=cnt+1
 		output.setNumber(1,0)
+		output.setBool(1,false)
 		if cnt >= 60 then
 			updateControl(0, 0, rader_azi, rader_ele)
 		else
@@ -332,8 +340,6 @@ function onTick()
 			output.setNumber(3,0)
 		end
 		return
-	else
-		cnt = 0
 	end
 	ship_x = self_X * c(rader_azi) * c(rader_ele) - self_Y * s(rader_azi) - self_Z * c(rader_azi) * s(rader_ele)
 	ship_y = self_X * s(rader_azi) * c(rader_ele) + self_Y * c(rader_azi) - self_Z * s(rader_azi) * s(rader_ele) + Y_offset
@@ -370,7 +376,7 @@ function onTick()
 		output.setNumber(4,404)
 	else
 		--式が間違っているので後で直す
-		target_x, target_y, target_z = rx+vx*t, ry+vy*t, rz+vz*t+G*t*t/2.0
+		target_x, target_y, target_z = rx+vx*t, ry+vy*t, rz+vz*t+dragDrop(t)
 		output.setNumber(4,200)
 	end
 
@@ -378,8 +384,25 @@ function onTick()
 	output.setNumber(7,target_y)
 	output.setNumber(8,target_z)
 	
-	output.setBool(1, mindist ~= math.huge and trigger(target_x, target_y,target_z,vx,vy,vz))
+	
     local dist, target_azi, target_ele = xyzToPolar(target_x, target_y, target_z)
+	if (target_azi < azimuthLimit - pi or pi - azimuthLimit < target_azi) and
+		target_ele < elevationLimit then
+		cnt=cnt+1
+		output.setNumber(1,0)
+		output.setBool(1,false)
+		if cnt >= 60 then
+			updateControl(0, 0, rader_azi, rader_ele)
+		else
+			resetControl()
+			output.setNumber(2,0)
+			output.setNumber(3,0)
+		end
+		return
+	end
+	cnt=0
+
+	output.setBool(1, trigger(target_x, target_y,target_z,vx,vy,vz))
 	output.setNumber(1,dist)
 	updateControl(target_azi, target_ele, rader_azi, rader_ele)
 	output.setNumber(9,target_azi)
